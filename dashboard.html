@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>YouTube Bot Analytics Dashboard</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="./config.js"></script>
   <style>
     :root {
       --bg: #0b1020;
@@ -80,6 +81,28 @@
     let dailyChart;
 
     const el = (id) => document.getElementById(id);
+
+    async function bootstrapConfig() {
+      try {
+        // 1) Local/Render-generated config.js
+        if (window.__APP_CONFIG__) {
+          if (window.__APP_CONFIG__.SUPABASE_URL) el('url').value = window.__APP_CONFIG__.SUPABASE_URL;
+          if (window.__APP_CONFIG__.SUPABASE_ANON_KEY) el('key').value = window.__APP_CONFIG__.SUPABASE_ANON_KEY;
+          if (window.__APP_CONFIG__.SUPABASE_SCHEMA) el('schema').value = window.__APP_CONFIG__.SUPABASE_SCHEMA;
+          return;
+        }
+
+        // 2) Optional backend endpoint (if you host with server)
+        const r = await fetch('/config', { headers: { Accept: 'application/json' } });
+        if (!r.ok) return;
+        const cfg = await r.json();
+        if (cfg?.SUPABASE_URL) el('url').value = cfg.SUPABASE_URL;
+        if (cfg?.SUPABASE_ANON_KEY) el('key').value = cfg.SUPABASE_ANON_KEY;
+        if (cfg?.SUPABASE_SCHEMA) el('schema').value = cfg.SUPABASE_SCHEMA;
+      } catch (_) {
+        // no-op
+      }
+    }
 
     async function q(base, key, schema, view, select='*', order='') {
       const url = new URL(`${base}/rest/v1/${view}`);
@@ -167,6 +190,7 @@
       el('url').value = localStorage.getItem('dash_url') || '';
       el('key').value = localStorage.getItem('dash_key') || '';
       el('schema').value = localStorage.getItem('dash_schema') || 'public';
+      bootstrapConfig();
     });
   </script>
 </body>
