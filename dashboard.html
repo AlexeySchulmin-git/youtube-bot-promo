@@ -64,7 +64,7 @@
         <canvas id="dailyChart" height="110"></canvas>
       </div>
       <div class="card">
-        <div class="k" style="margin-bottom:8px">Топ команд</div>
+        <div class="k" id="topTitle" style="margin-bottom:8px">Топ команд</div>
         <table class="table" id="commandsTbl"><thead><tr><th>Команда</th><th>Событий</th><th>Юзеров</th></tr></thead><tbody></tbody></table>
       </div>
     </div>
@@ -124,6 +124,27 @@
       return res.json();
     }
 
+    async function qWithFilters(base, key, schema, view, select='*', order='', filters = {}) {
+      const url = new URL(`${base}/rest/v1/${view}`);
+      url.searchParams.set('select', select);
+      if (order) url.searchParams.set('order', order);
+      Object.entries(filters).forEach(([k, v]) => url.searchParams.set(k, v));
+      const res = await fetch(url.toString(), {
+        headers: {
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+          Accept: 'application/json',
+          Prefer: 'count=exact',
+          'Accept-Profile': schema,
+        },
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(`${view}: ${res.status} ${txt}`);
+      }
+      return res.json();
+    }
+
     function setKpi(kpi){
       el('dau').textContent = kpi?.dau_now ?? '0';
       el('wau').textContent = kpi?.wau_now ?? '0';
@@ -146,6 +167,16 @@
     function fillTable(tableId, rows, columns){
       const tbody = document.querySelector(`#${tableId} tbody`);
       tbody.innerHTML = '';
+      if (!rows.length) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = columns.length;
+        td.className = 'muted';
+        td.textContent = 'Нет данных';
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+        return;
+      }
       rows.forEach(r => {
         const tr = document.createElement('tr');
         columns.forEach(c => {
@@ -175,7 +206,34 @@
         drawDaily(daily.slice(-30));
 
         const commands = await q(base, key, schema, 'v_analytics_commands');
-        fillTable('commandsTbl', commands.slice(0, 10), ['command', 'total', 'users']);
+        if (commands.length > 0) {
+          el('topTitle').textContent = 'Топ команд';
+          fillTable('commandsTbl', commands.slice(0, 10), ['command', 'total', 'users']);
+        } else {
+          const menuEvents = await qWithFilters(
+            base,
+            key,
+            schema,
+            'analytics_events',
+            'telegram_user_id,meta',
+            'event_at.desc',
+            { event_name: 'eq.menu_clicked', limit: '1000' }
+          );
+          const acc = new Map();
+          for (const row of menuEvents) {
+            const item = row?.meta?.item;
+            if (!item) continue;
+            if (!acc.has(item)) acc.set(item, { item, total: 0, usersSet: new Set() });
+            const rec = acc.get(item);
+            rec.total += 1;
+            rec.usersSet.add(row.telegram_user_id);
+          }
+          const clean = Array.from(acc.values())
+            .map(r => ({ item: r.item, total: r.total, users: r.usersSet.size }))
+            .sort((a, b) => b.total - a.total);
+          el('topTitle').textContent = clean.length ? 'Топ действий меню' : 'Топ команд';
+          fillTable('commandsTbl', clean.slice(0, 10), ['item', 'total', 'users']);
+        }
 
         const retention = await q(base, key, schema, 'v_analytics_retention', '*', 'cohort_day.desc');
         fillTable('retentionTbl', retention.slice(0, 10), ['cohort_day', 'new_users', 'retention_d1_pct', 'retention_d7_pct', 'retention_d30_pct']);
