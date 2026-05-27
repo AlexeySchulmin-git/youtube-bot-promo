@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>YouTube Bot Analytics Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --card: #121935;
+      --text: #e9eeff;
+      --muted: #9aa6d1;
+      --accent: #5b8cff;
+      --ok: #25c79a;
+      --warn: #ffb347;
+      --danger: #ff6b6b;
+      --border: rgba(255,255,255,.08);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Inter, system-ui, sans-serif; background: var(--bg); color: var(--text); }
+    .wrap { max-width: 1200px; margin: 0 auto; padding: 24px; }
+    h1 { margin: 0 0 8px; }
+    .sub { color: var(--muted); margin-bottom: 20px; }
+    .toolbar { display: grid; gap: 10px; grid-template-columns: 1fr 1fr 1fr auto; margin-bottom: 16px; }
+    input, button { padding: 12px; border-radius: 10px; border: 1px solid var(--border); background: #0f1630; color: var(--text); }
+    button { background: var(--accent); border-color: transparent; cursor: pointer; font-weight: 600; }
+    button:hover { opacity: .9; }
+    .grid { display: grid; gap: 12px; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 14px; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 14px; }
+    .k { color: var(--muted); font-size: 12px; }
+    .v { font-size: 28px; font-weight: 700; margin-top: 6px; }
+    .panels { display: grid; gap: 12px; grid-template-columns: 2fr 1fr; }
+    .table { width: 100%; border-collapse: collapse; }
+    .table th,.table td { border-bottom: 1px solid var(--border); padding: 8px; text-align: left; font-size: 14px; }
+    .muted { color: var(--muted); }
+    .footer { margin-top: 14px; color: var(--muted); font-size: 12px; }
+    @media (max-width: 980px){ .grid{grid-template-columns:1fr 1fr;} .panels{grid-template-columns:1fr;} .toolbar{grid-template-columns:1fr;} }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>📊 Dashboard аналитики бота</h1>
+    <div class="sub">Источник: Supabase views (`v_analytics_*`).</div>
+
+    <div class="toolbar">
+      <input id="url" placeholder="SUPABASE_URL (https://xxx.supabase.co)" />
+      <input id="key" placeholder="SUPABASE_ANON_KEY" />
+      <input id="schema" placeholder="Schema (обычно public)" value="public" />
+      <button id="loadBtn">Загрузить</button>
+    </div>
+
+    <div class="grid">
+      <div class="card"><div class="k">DAU (24ч)</div><div id="dau" class="v">—</div></div>
+      <div class="card"><div class="k">WAU (7д)</div><div id="wau" class="v">—</div></div>
+      <div class="card"><div class="k">MAU (30д)</div><div id="mau" class="v">—</div></div>
+      <div class="card"><div class="k">Start → Summary</div><div id="conv" class="v">—</div></div>
+    </div>
+
+    <div class="panels">
+      <div class="card">
+        <div class="k" style="margin-bottom:8px">DAU за 30 дней</div>
+        <canvas id="dailyChart" height="110"></canvas>
+      </div>
+      <div class="card">
+        <div class="k" style="margin-bottom:8px">Топ команд</div>
+        <table class="table" id="commandsTbl"><thead><tr><th>Команда</th><th>Событий</th><th>Юзеров</th></tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <div class="k" style="margin-bottom:8px">Retention (последние 10 cohort)</div>
+      <table class="table" id="retentionTbl"><thead><tr><th>Cohort</th><th>New</th><th>D1%</th><th>D7%</th><th>D30%</th></tr></thead><tbody></tbody></table>
+    </div>
+
+    <div class="footer">Совет: используйте `anon key` только для read-only views и включите RLS/политики при необходимости.</div>
+  </div>
+
+  <script>
+    let dailyChart;
+
+    const el = (id) => document.getElementById(id);
+
+    async function q(base, key, schema, view, select='*', order='') {
+      const url = new URL(`${base}/rest/v1/${view}`);
+      url.searchParams.set('select', select);
+      if (order) url.searchParams.set('order', order);
+      const res = await fetch(url.toString(), {
+        headers: {
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+          Accept: 'application/json',
+          Prefer: 'count=exact',
+          'Accept-Profile': schema,
+        },
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(`${view}: ${res.status} ${txt}`);
+      }
+      return res.json();
+    }
+
+    function setKpi(kpi){
+      el('dau').textContent = kpi?.dau_now ?? '0';
+      el('wau').textContent = kpi?.wau_now ?? '0';
+      el('mau').textContent = kpi?.mau_now ?? '0';
+      el('conv').textContent = `${kpi?.start_to_summary_conversion_pct ?? 0}%`;
+    }
+
+    function drawDaily(rows){
+      const labels = rows.map(r => r.day);
+      const data = rows.map(r => r.dau);
+      const ctx = el('dailyChart').getContext('2d');
+      if (dailyChart) dailyChart.destroy();
+      dailyChart = new Chart(ctx, {
+        type: 'line',
+        data: { labels, datasets: [{ label: 'DAU', data, borderColor: '#5b8cff', backgroundColor: 'rgba(91,140,255,.2)', fill: true, tension: .3 }] },
+        options: { plugins: { legend: { display: false } }, scales: { x: { ticks: { color: '#9aa6d1' } }, y: { ticks: { color: '#9aa6d1' } } } }
+      });
+    }
+
+    function fillTable(tableId, rows, columns){
+      const tbody = document.querySelector(`#${tableId} tbody`);
+      tbody.innerHTML = '';
+      rows.forEach(r => {
+        const tr = document.createElement('tr');
+        columns.forEach(c => {
+          const td = document.createElement('td');
+          td.textContent = r[c] ?? '';
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function loadDashboard(){
+      const base = el('url').value.trim().replace(/\/$/, '');
+      const key = el('key').value.trim();
+      const schema = el('schema').value.trim() || 'public';
+      if (!base || !key) return alert('Заполните SUPABASE_URL и SUPABASE_ANON_KEY');
+
+      localStorage.setItem('dash_url', base);
+      localStorage.setItem('dash_key', key);
+      localStorage.setItem('dash_schema', schema);
+
+      try {
+        const [kpi] = await q(base, key, schema, 'v_analytics_kpi');
+        setKpi(kpi || {});
+
+        const daily = await q(base, key, schema, 'v_analytics_daily', '*', 'day.asc');
+        drawDaily(daily.slice(-30));
+
+        const commands = await q(base, key, schema, 'v_analytics_commands');
+        fillTable('commandsTbl', commands.slice(0, 10), ['command', 'total', 'users']);
+
+        const retention = await q(base, key, schema, 'v_analytics_retention', '*', 'cohort_day.desc');
+        fillTable('retentionTbl', retention.slice(0, 10), ['cohort_day', 'new_users', 'retention_d1_pct', 'retention_d7_pct', 'retention_d30_pct']);
+      } catch (e) {
+        alert('Ошибка загрузки: ' + e.message);
+      }
+    }
+
+    el('loadBtn').addEventListener('click', loadDashboard);
+
+    window.addEventListener('DOMContentLoaded', () => {
+      el('url').value = localStorage.getItem('dash_url') || '';
+      el('key').value = localStorage.getItem('dash_key') || '';
+      el('schema').value = localStorage.getItem('dash_schema') || 'public';
+    });
+  </script>
+</body>
+</html>
